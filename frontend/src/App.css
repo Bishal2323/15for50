@@ -1,0 +1,56 @@
+/* Medical-grade ACL Risk Monitor Styles */
+.risk-indicator {
+  transition: all 0.3s ease;
+}
+
+.risk-safe {
+  color: #10b981;
+  background-color: rgba(16, 185, 129, 0.1);
+}
+
+.risk-monitor {
+  color: #f59e0b;
+  background-color: rgba(245, 158, 11, 0.1);
+}
+
+.risk-high {
+  color: #ef4444;
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.chart-container {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.medical-card {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: box-shadow 0.2s ease;
+}
+
+.medical-card:hover {
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.sidebar-transition {
+  transition: width 0.3s ease, transform 0.3s ease;
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
