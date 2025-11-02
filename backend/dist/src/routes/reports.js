@@ -5,37 +5,292 @@ const dailyReport_model_1 = require("../models/dailyReport.model");
 const riskScore_model_1 = require("../models/riskScore.model");
 const auth_1 = require("../middleware/auth");
 const risk_1 = require("../services/risk");
+const riskFactor_model_1 = require("../models/riskFactor.model");
+const env_1 = require("../setup/env");
+const user_model_1 = require("../models/user.model");
 const router = (0, express_1.Router)();
 router.get('/', auth_1.requireAuth, async (req, res) => {
     const user = req.user;
     const athleteId = req.query.athleteId || user.id;
-    const reports = await dailyReport_model_1.DailyReport.find({ athleteId }).sort({ date: 1 });
-    return res.json({ reports });
+    // Try new schema first, fallback to old schema for backward compatibility
+    let athleteReports = await dailyReport_model_1.AthleteReports.findOne({ athleteId });
+    if (athleteReports) {
+        // Return reports from new schema, sorted by date
+        const reports = athleteReports.dailyReports.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        return res.json({ reports });
+    }
+    else {
+        // Fallback to old schema
+        const reports = await dailyReport_model_1.DailyReport.find({ athleteId }).sort({ date: 1 });
+        return res.json({ reports });
+    }
 });
 router.post('/', auth_1.requireAuth, async (req, res) => {
+    const env = (0, env_1.loadEnv)();
     const user = req.user;
     const payload = req.body;
-    const report = await dailyReport_model_1.DailyReport.create({
-        athleteId: user.id,
-        date: new Date(),
-        trainingDuration: payload.trainingDuration,
-        fatigueLevel: payload.fatigueLevel,
+    // Fetch current user to read aclRisk prior (null -> 0)
+    let currentAclRisk = 0;
+    try {
+        const dbUser = await user_model_1.User.findById(user.id).lean();
+        currentAclRisk = typeof dbUser?.aclRisk === 'number' ? dbUser.aclRisk : 0;
+    }
+    catch { }
+    // Use provided date or default to current date
+    const reportDate = payload.date ? new Date(payload.date) : new Date();
+    // Create the report data object
+    const reportData = {
+        date: reportDate,
+        // Sleep & Recovery
         sleepHours: payload.sleepHours,
-        kneeStabilityL: payload.kneeStabilityL,
-        kneeStabilityR: payload.kneeStabilityR,
-        comments: payload.comments,
-    });
-    const reports = await dailyReport_model_1.DailyReport.find({ athleteId: user.id }).sort({ date: 1 });
-    const metrics = reports.map((r) => ({
-        trainingDuration: r.trainingDuration,
+        sleepQuality: payload.sleepQuality,
+        // Physical State
+        fatigueLevel: payload.fatigueLevel,
+        stressLevel: payload.stressLevel,
+        painLevel: payload.painLevel,
+        painAreas: payload.painAreas || [],
+        jointStrain: payload.jointStrain,
+        localSoreness: payload.localSoreness,
+        readinessToTrain: payload.readinessToTrain,
+        // Mental State
+        mood: payload.mood,
+        nonSportStressors: payload.nonSportStressors,
+        nonSportStressorsNotes: payload.nonSportStressorsNotes,
+        // Training (Optional)
+        trainingIntensity: payload.trainingIntensity,
+        trainingDuration: payload.trainingDuration,
+        trainingRPE: payload.trainingRPE,
+        trainingLoadSRPE: payload.trainingLoadSRPE,
+        // Female Athletes (Optional)
+        menstrualStatus: payload.menstrualStatus,
+        // Per-body-part attributes (nullable fields allowed)
+        bodyAttributes: payload.bodyAttributes ?? {},
+        // General
+        notes: payload.notes,
+        comments: payload.comments, // Legacy field
+        symptoms: payload.symptoms || [],
+    };
+    // Find or create athlete reports document
+    let athleteReports = await dailyReport_model_1.AthleteReports.findOne({ athleteId: user.id });
+    if (!athleteReports) {
+        // Create new athlete reports document
+        athleteReports = await dailyReport_model_1.AthleteReports.create({
+            athleteId: user.id,
+            dailyReports: [reportData]
+        });
+    }
+    else {
+        // Check if report for this date already exists
+        const existingReportIndex = athleteReports.dailyReports.findIndex(report => report.date.toDateString() === reportDate.toDateString());
+        if (existingReportIndex >= 0) {
+            // Update existing report subdocument safely
+            const existingEntry = athleteReports.dailyReports[existingReportIndex];
+            existingEntry.set(reportData);
+        }
+        else {
+            // Add new report
+            athleteReports.dailyReports.push(reportData);
+        }
+        await athleteReports.save();
+    }
+    // Get the created/updated report
+    const report = athleteReports.dailyReports.find(r => r.date.toDateString() === reportDate.toDateString());
+    // Get all reports for risk calculation from new schema
+    const allReports = athleteReports.dailyReports.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    // Updated metrics for risk calculation - include new relevant fields
+    const metrics = allReports.map((r) => ({
+        // Core metrics for risk calculation
+        trainingDuration: r.trainingDuration || 0,
         fatigueLevel: r.fatigueLevel,
         sleepHours: r.sleepHours,
+        sleepQuality: r.sleepQuality,
+        stressLevel: r.stressLevel,
+        // Legacy metrics: default to 0 if missing
+        painLevel: typeof r.painLevel === 'number' ? r.painLevel : 0,
+        localSoreness: typeof r.localSoreness === 'number' ? r.localSoreness : 0,
+        readinessToTrain: r.readinessToTrain,
+        mood: r.mood,
+        trainingRPE: r.trainingRPE || 0,
+        trainingLoadSRPE: r.trainingLoadSRPE || 0,
+        // Legacy fields for backward compatibility
         kneeStabilityL: r.kneeStabilityL,
         kneeStabilityR: r.kneeStabilityR,
     }));
     const risk = (0, risk_1.computeRisk)(metrics);
     await riskScore_model_1.RiskScore.create({ athleteId: user.id, date: report.date, ...risk });
-    return res.status(201).json({ report, risk });
+    // Build historical averages (excluding the current report)
+    const previousReports = allReports.filter((r) => r.date.toDateString() !== reportDate.toDateString());
+    function avg(nums) { const arr = nums.filter(n => typeof n === 'number' && !Number.isNaN(n)); return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : undefined; }
+    const historicalAverages = {
+        sleepHours: avg(previousReports.map((r) => r.sleepHours)),
+        sleepQuality: avg(previousReports.map((r) => r.sleepQuality)),
+        fatigueLevel: avg(previousReports.map((r) => r.fatigueLevel)),
+        stressLevel: avg(previousReports.map((r) => r.stressLevel)),
+        readinessToTrain: avg(previousReports.map((r) => r.readinessToTrain)),
+        mood: avg(previousReports.map((r) => r.mood)),
+        trainingRPE: avg(previousReports.map((r) => r.trainingRPE || 0)),
+        trainingLoadSRPE: avg(previousReports.map((r) => r.trainingLoadSRPE || 0)),
+        trainingDuration: avg(previousReports.map((r) => r.trainingDuration || 0)),
+    };
+    // RiskFactor averages for strength/neuromuscular and anatomical context
+    const rfDoc = await riskFactor_model_1.RiskFactor.findOrCreateByAthleteId(user.id);
+    const avgMetric = (arr = []) => {
+        const vals = (arr || []).map(x => Number(x.value)).filter(v => Number.isFinite(v));
+        return vals.length ? Number((vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(2)) : 0;
+    };
+    const strengthAsymmetryAvg = avgMetric(rfDoc.strengthAsymmetry);
+    const neuromuscularControlAvg = avgMetric(rfDoc.neuromuscularControl);
+    const anatomicalAvg = avgMetric(rfDoc.anatomicalFixedRisk);
+    const strengthNote = strengthAsymmetryAvg === 0 && !(rfDoc.strengthAsymmetry && rfDoc.strengthAsymmetry.length)
+        ? 'No past strengthAsymmetry data provided by user; treat as 0 by default.'
+        : '';
+    const neuroNote = neuromuscularControlAvg === 0 && !(rfDoc.neuromuscularControl && rfDoc.neuromuscularControl.length)
+        ? 'No past neuromuscularControl data provided by user; treat as 0 by default.'
+        : '';
+    const anatomicalNote = anatomicalAvg === 0 && !(rfDoc.anatomicalFixedRisk && rfDoc.anatomicalFixedRisk.length)
+        ? 'AnatomicalRisk constitutes 30%, but no data provided; treat as 0 by default.'
+        : '';
+    // Prepare prompt for Gemini
+    const prompt = `You are an expert sports performance analyst. Based on the CURRENT daily athlete report and HISTORICAL AVERAGES, estimate and return STRICT JSON: {"workloadManagement": <integer 1-10>, "mentalRecovery": <integer 1-10>, "aclRisk": <integer 1-100>, "recommendation": "<short actionable tip>"}.
+
+IMPORTANT WEIGHTING NOTES:
+- workloadManagement + mentalRecovery together constitute 20% of aclRisk.
+- strengthAsymmetry + neuromuscularControl together constitute 50% of aclRisk. If no past data is provided for either, treat that category as 0 by default.
+- anatomicalRisk constitutes 30% of aclRisk. If no anatomical data is available, treat it as 0 by default.
+
+Do NOT generalize categories. Use the named categories with the weights above.
+
+PRIOR ACL RISK: Use currentAclRisk as prior; if it is 0 it means unknown. Do NOT skew aclRisk too much if the provided data points are not strongly indicative. Prefer small adjustments around currentAclRisk unless signals are significant.
+
+CURRENT REPORT (fields and scales noted): ${JSON.stringify({
+        sleepHours: reportData.sleepHours, // hours 0-24
+        sleepQuality: reportData.sleepQuality, // 1-10
+        fatigueLevel: reportData.fatigueLevel, // 0-100
+        stressLevel: reportData.stressLevel, // 0-100
+        readinessToTrain: reportData.readinessToTrain, // 1-10
+        mood: reportData.mood, // 1-10
+        trainingRPE: reportData.trainingRPE, // 1-10
+        trainingLoadSRPE: reportData.trainingLoadSRPE, // arbitrary load
+        trainingDuration: reportData.trainingDuration // minutes
+    })}
+
+HISTORICAL AVERAGES (same fields): ${JSON.stringify(historicalAverages)}
+
+PAST STRENGTH/NEURO AVERAGES (1-10 scales from RiskFactor): ${JSON.stringify({ strengthAsymmetryAvg, neuromuscularControlAvg })}
+${strengthNote}${strengthNote && (neuroNote || anatomicalNote) ? ' ' : ''}${neuroNote}${(strengthNote || neuroNote) && anatomicalNote ? ' ' : ''}${anatomicalNote}
+
+CURRENT ACL RISK PRIOR (0-100, 0 means unknown): ${currentAclRisk}
+
+Output only JSON, no extra text.`;
+    // Call Gemini API
+    let geminiResult = null;
+    console.log(prompt);
+    try {
+        const resp = await fetch(env.GEMINI_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': env.GEMINI_API_KEY,
+            },
+            body: JSON.stringify({
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                generationConfig: { responseMimeType: 'application/json' }
+            }),
+        });
+        const data = await resp.json();
+        console.log(data);
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+            // Support fenced JSON output like ```json\n{...}\n```
+            const fence = text.match(/```(?:json)?\n([\s\S]*?)\n```/i);
+            const maybeJson = fence ? fence[1].trim() : text.trim();
+            try {
+                const parsed = JSON.parse(maybeJson);
+                const wm = Math.max(1, Math.min(10, Math.round(Number(parsed.workloadManagement))));
+                const mr = Math.max(1, Math.min(10, Math.round(Number(parsed.mentalRecovery))));
+                const acl = parsed.aclRisk !== undefined ? Math.max(1, Math.min(100, Math.round(Number(parsed.aclRisk)))) : undefined;
+                const note = typeof parsed.note === 'string' ? parsed.note : (typeof parsed.recommendation === 'string' ? parsed.recommendation : undefined);
+                geminiResult = { workloadManagement: wm, mentalRecovery: mr, aclRisk: acl, note };
+            }
+            catch {
+                // If model returns non-JSON, attempt simple extraction or fallback
+                const wmMatch = text.match(/"workloadManagement"\s*:\s*(\d{1,2})/i) || text.match(/workloadManagement\D(\d{1,2})/i);
+                const mrMatch = text.match(/"mentalRecovery"\s*:\s*(\d{1,2})/i) || text.match(/mentalRecovery\D(\d{1,2})/i);
+                const aclMatch = text.match(/"aclRisk"\s*:\s*(\d{1,3})/i) || text.match(/aclRisk\D(\d{1,3})/i);
+                const noteMatch = text.match(/"note"\s*:\s*"([^"\n]+)"/i) || text.match(/"recommendation"\s*:\s*"([^"\n]+)"/i);
+                const wm = wmMatch ? Math.max(1, Math.min(10, Number(wmMatch[1]))) : 5;
+                const mr = mrMatch ? Math.max(1, Math.min(10, Number(mrMatch[1]))) : 5;
+                const acl = aclMatch ? Math.max(1, Math.min(100, Number(aclMatch[1]))) : undefined;
+                const note = noteMatch ? noteMatch[1] : undefined;
+                geminiResult = { workloadManagement: wm, mentalRecovery: mr, aclRisk: acl, note: note || text.slice(0, 300) };
+            }
+        }
+    }
+    catch (err) {
+        console.error('Gemini API error:', err);
+    }
+    // Persist Gemini outputs into RiskFactor per-metric arrays (avoid duplicate same-day entries)
+    let riskFactorEntry = null;
+    if (geminiResult) {
+        try {
+            const rfDoc = await riskFactor_model_1.RiskFactor.findOrCreateByAthleteId(user.id);
+            // Use the report's date rather than "today" to avoid blocking backfills
+            const entryDate = report.date || new Date();
+            const entryDateStr = new Date(entryDate).toDateString();
+            const hasReportDateDaily = ((rfDoc.workloadManagement || []).some((e) => e.reportType === 'daily' && new Date(e.date).toDateString() === entryDateStr) ||
+                (rfDoc.mentalRecovery || []).some((e) => e.reportType === 'daily' && new Date(e.date).toDateString() === entryDateStr));
+            console.log(geminiResult, 'RESULTT');
+            if (!hasReportDateDaily) {
+                rfDoc.workloadManagement.push({ value: geminiResult.workloadManagement, date: entryDate, reportType: 'daily' });
+                rfDoc.mentalRecovery.push({ value: geminiResult.mentalRecovery, date: entryDate, reportType: 'daily' });
+                if (geminiResult.note) {
+                    rfDoc.notes.push({ value: geminiResult.note, date: entryDate });
+                }
+                await rfDoc.save();
+                riskFactorEntry = {
+                    workloadManagement: rfDoc.workloadManagement.slice(-1)[0],
+                    mentalRecovery: rfDoc.mentalRecovery.slice(-1)[0],
+                    note: (rfDoc.notes || []).slice(-1)[0] || undefined,
+                };
+            }
+        }
+        catch (e) {
+            console.error('Failed to persist RiskFactor entry:', e);
+        }
+    }
+    // Update user's aclRisk if provided by Gemini
+    if (geminiResult?.aclRisk !== undefined && Number.isFinite(geminiResult.aclRisk)) {
+        try {
+            await user_model_1.User.findByIdAndUpdate(user.id, { $set: { aclRisk: geminiResult.aclRisk } });
+        }
+        catch (e) {
+            console.error('Failed to update user aclRisk:', e);
+        }
+    }
+    return res.status(201).json({ report, risk, aiFactors: geminiResult || undefined, riskFactorEntry: riskFactorEntry || undefined });
+});
+// Get a specific report by date
+router.get('/date/:date', auth_1.requireAuth, async (req, res) => {
+    const user = req.user;
+    const athleteId = req.query.athleteId || user.id;
+    const requestedDate = new Date(req.params.date);
+    // Try new schema first
+    const athleteReports = await dailyReport_model_1.AthleteReports.findOne({ athleteId });
+    if (athleteReports) {
+        const report = athleteReports.dailyReports.find(r => r.date.toDateString() === requestedDate.toDateString());
+        return res.json({ report: report || null });
+    }
+    else {
+        // Fallback to old schema
+        const report = await dailyReport_model_1.DailyReport.findOne({
+            athleteId,
+            date: {
+                $gte: new Date(requestedDate.setHours(0, 0, 0, 0)),
+                $lt: new Date(requestedDate.setHours(23, 59, 59, 999))
+            }
+        });
+        return res.json({ report });
+    }
 });
 exports.default = router;
 //# sourceMappingURL=reports.js.map

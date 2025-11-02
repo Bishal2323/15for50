@@ -10,4 +10,6 @@ export declare function loadEnv(): {
     AWS_REGION: string;
     S3_BUCKET_NAME: string;
     SEED_DEMO: boolean;
+    GEMINI_API_URL: string;
+    GEMINI_API_KEY: string;
 };

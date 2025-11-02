@@ -37,6 +37,7 @@ export function AthleteProfile() {
           heightCm: userData.heightCm,
           weightKg: userData.weightKg,
           bmi: userData.bmi,
+          aclRisk: typeof (userData as any).aclRisk === 'number' ? (userData as any).aclRisk : undefined,
         })
 
         // Populate form fields once on mount

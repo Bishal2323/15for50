@@ -33,11 +33,10 @@ export function ComposeMessageModal({ open, onClose, recipient, recipientUserId,
   const onSend = async () => {
     try {
       setIsSending(true);
-      let notification;
       if (recipientUserId) {
-        ({ notification } = await sendMessageToUser({ recipientUserId, message: text, attachments: files }));
+        await sendMessageToUser({ recipientUserId, message: text, attachments: files });
       } else if (recipient) {
-        ({ notification } = await sendMessage({ recipient, message: text, attachments: files }));
+        await sendMessage({ recipient, message: text, attachments: files });
       } else {
         throw new Error('No recipient specified');
       }

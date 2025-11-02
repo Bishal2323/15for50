@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { User } from '../models/user.model';
 import { PhysioReports } from '../models/physioReport.model';
+import { RiskFactor } from '../models/riskFactor.model';
+import { loadEnv } from '../setup/env';
 
 const router = Router();
 
@@ -102,6 +104,7 @@ router.get('/reports', async (req: Request, res: Response) => {
 // Create a physio report for current physiotherapist
 router.post('/reports', async (req: Request, res: Response) => {
   try {
+    const env = loadEnv();
     const physio = (req as any).user;
     const payload = req.body || {};
 
@@ -136,6 +139,24 @@ router.post('/reports', async (req: Request, res: Response) => {
     }
 
     let doc = await PhysioReports.findOne({ athleteId });
+
+    // Duplicate date check: prevent multiple entries for the same athlete by the same physio on the same date
+    if (doc && Array.isArray(doc.physioMetrics)) {
+      const isDuplicate = doc.physioMetrics.some((m: any) => {
+        try {
+          const d = new Date(m.reportDate);
+          return new Date(d).toDateString() === new Date(reportDate).toDateString();
+        } catch {
+          return false;
+        }
+      });
+      if (isDuplicate) {
+        return res.status(409).json({
+          error: 'Physio report already exists for this athlete on this date',
+          date: reportDate.toISOString().slice(0, 10),
+        });
+      }
+    }
     const entry = {
       physioId: physio.id,
       reportDate,
@@ -172,7 +193,155 @@ router.post('/reports', async (req: Request, res: Response) => {
     }
 
     const created = (doc.physioMetrics || []).slice(-1)[0];
-    return res.status(201).json({ report: { ...created, athleteId }, message: 'Physio report created' });
+
+    // Build previous physio averages (excluding current created entry)
+    const prevEntries = (doc.physioMetrics || []).filter((e: any) => new Date(e.reportDate).toDateString() !== new Date(reportDate).toDateString());
+    const avg = (arr: number[]) => {
+      const vals = arr.filter(v => Number.isFinite(Number(v))).map(Number);
+      return vals.length ? Number((vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(2)) : undefined;
+    };
+    const physioAverages = {
+      hqRatio: avg(prevEntries.map((e: any) => e.metrics?.hqRatio)),
+      peakDynamicKneeValgusDeg: avg(prevEntries.map((e: any) => e.metrics?.peakDynamicKneeValgusDeg)),
+      trunkLeanLandingDeg: avg(prevEntries.map((e: any) => e.metrics?.trunkLeanLandingDeg)),
+      cmjPeakPowerWkg: avg(prevEntries.map((e: any) => e.metrics?.cmjPeakPowerWkg)),
+      beightonScore: avg(prevEntries.map((e: any) => e.metrics?.beightonScore)),
+      mvicLsi: avg(prevEntries.map((e: any) => e.metrics?.mvicLsi)),
+      emgOnsetDelayMs: avg(prevEntries.map((e: any) => e.metrics?.emgOnsetDelayMs)),
+    };
+
+    // RiskFactor averages for context
+    const rfDoc = await RiskFactor.findOrCreateByAthleteId(athleteId);
+    const avgMetric = (arr: Array<{ value: number }> = []) => {
+      const vals = (arr || []).map(x => Number(x.value)).filter(v => Number.isFinite(v));
+      return vals.length ? Math.round(vals.reduce((s, v) => s + v, 0) / vals.length) : 0;
+    };
+    const rfAverages = {
+      workloadManagement: avgMetric(rfDoc.workloadManagement as any),
+      mentalRecovery: avgMetric(rfDoc.mentalRecovery as any),
+      strengthAsymmetry: avgMetric(rfDoc.strengthAsymmetry as any),
+      neuromuscularControl: avgMetric(rfDoc.neuromuscularControl as any),
+    };
+
+    // Current ACL risk prior
+    let currentAclRisk = 0;
+    try {
+      const dbAthlete = await User.findById(athleteId).lean();
+      currentAclRisk = typeof dbAthlete?.aclRisk === 'number' ? dbAthlete.aclRisk! : 0;
+    } catch { }
+
+    // Prepare prompt for Gemini
+    const prompt = `You are analyzing a physiotherapy assessment report for an athlete.
+
+CURRENT REPORT DATE: ${reportDate.toISOString().slice(0, 10)}
+
+CURRENT PHYSIO METRICS:
+${JSON.stringify(entry.metrics)}
+
+PREVIOUS PHYSIO REPORTS AVERAGES:
+${JSON.stringify(physioAverages)}
+
+RISK FACTOR AVERAGES (1-10 scales):
+${JSON.stringify(rfAverages)}
+
+CURRENT ACL RISK PRIOR (0-100, 0 means unknown): ${currentAclRisk}
+
+WEIGHTING BREAKDOWN FOR ACL RISK (THIS PHYSIO ASSESSMENT):
+- workloadManagement + mentalRecovery together constitute 20% of the ACL risk.
+- strengthAsymmetry + neuromuscularControl together constitute 50% of the ACL risk.
+- anatomicalRisk constitutes 30% of the ACL risk. Small deviations in anatomical metrics can significantly influence the ACL risk due to biomechanics.
+
+Do NOT generalize 'risk factors'. Use ONLY the named categories above with the specified weights. Make conservative adjustments relative to the prior unless evidence is strong.
+
+Return ONLY valid JSON with keys: { "anatomicalRisk": "Low" | "Moderate" | "High", "aclRisk": number, "note": string }.`;
+
+    let aiResult: { anatomicalRisk?: string; aclRisk?: number; note?: string } | null = null;
+    try {
+      const resp = await fetch(env.GEMINI_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': env.GEMINI_API_KEY,
+        },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json' }
+        }),
+      });
+      const data = await resp.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined;
+      if (text) {
+        const fence = text.match(/```(?:json)?\n([\s\S]*?)\n```/i);
+        const maybeJson = fence ? fence[1].trim() : text.trim();
+        try {
+          const parsed = JSON.parse(maybeJson);
+          const anat = typeof parsed.anatomicalRisk === 'string' ? parsed.anatomicalRisk : undefined;
+          const acl = parsed.aclRisk !== undefined ? Math.max(1, Math.min(100, Math.round(Number(parsed.aclRisk)))) : undefined;
+          const note = typeof parsed.note === 'string' ? parsed.note : undefined;
+          aiResult = { anatomicalRisk: anat, aclRisk: acl, note };
+        } catch {
+          const anatMatch = text.match(/"anatomicalRisk"\s*:\s*"(Low|Moderate|High)"/i);
+          const aclMatch = text.match(/"aclRisk"\s*:\s*(\d{1,3})/i) || text.match(/aclRisk\D(\d{1,3})/i);
+          const noteMatch = text.match(/"note"\s*:\s*"([^"\n]+)"/i);
+          const anat = anatMatch ? anatMatch[1] : undefined;
+          const acl = aclMatch ? Math.max(1, Math.min(100, Number(aclMatch[1]))) : undefined;
+          const note = noteMatch ? noteMatch[1] : undefined;
+          aiResult = { anatomicalRisk: anat, aclRisk: acl, note: note || text.slice(0, 300) };
+        }
+      }
+    } catch (err) {
+      console.error('Gemini API error (physio):', err);
+    }
+
+    // If AI suggests anatomicalRisk, update the created physio entry
+    if (aiResult?.anatomicalRisk) {
+      try {
+        if (created && created.metrics) {
+          created.metrics.anatomicalRisk = aiResult.anatomicalRisk;
+          await doc.save();
+        }
+      } catch (e) {
+        console.error('Failed updating physio anatomicalRisk from AI:', e);
+      }
+    }
+
+    // Persist anatomicalFixedRisk and note into RiskFactor with weekly-type and reportDate
+    let riskFactorEntry: any = null;
+    try {
+      const entryDate = reportDate;
+      const entryDateStr = new Date(entryDate).toDateString();
+      const rfHasWeekly = (
+        (rfDoc.anatomicalFixedRisk || []).some((e: any) => e.reportType === 'weekly' && new Date(e.date).toDateString() === entryDateStr)
+      );
+      if (!rfHasWeekly) {
+        if (aiResult?.anatomicalRisk) {
+          const map: Record<string, number> = { Low: 3, Moderate: 6, High: 9 };
+          const val = map[(aiResult.anatomicalRisk || '').replace(/^(low|moderate|high)$/i, (m: string) => m.charAt(0).toUpperCase() + m.slice(1).toLowerCase())] || 5;
+          rfDoc.anatomicalFixedRisk.push({ value: val, date: entryDate, reportType: 'weekly' });
+        }
+        if (aiResult?.note) {
+          rfDoc.notes.push({ value: aiResult.note, date: entryDate });
+        }
+        await rfDoc.save();
+        riskFactorEntry = {
+          anatomicalFixedRisk: rfDoc.anatomicalFixedRisk.slice(-1)[0],
+          note: (rfDoc.notes || []).slice(-1)[0] || undefined,
+        };
+      }
+    } catch (e) {
+      console.error('Failed to persist anatomicalFixedRisk:', e);
+    }
+
+    // Update athlete's aclRisk from AI
+    if (aiResult?.aclRisk !== undefined && Number.isFinite(aiResult.aclRisk)) {
+      try {
+        await User.findByIdAndUpdate(athleteId, { $set: { aclRisk: aiResult.aclRisk } });
+      } catch (e) {
+        console.error('Failed to update athlete aclRisk (physio):', e);
+      }
+    }
+
+    return res.status(201).json({ report: { ...created, athleteId }, aiFactors: aiResult || undefined, riskFactorEntry: riskFactorEntry || undefined, message: 'Physio report created' });
   } catch (error) {
     console.error('Error creating physio report:', error);
     return res.status(500).json({ error: 'Failed to create physio report' });

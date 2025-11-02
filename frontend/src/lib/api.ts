@@ -23,7 +23,9 @@ function toBackendRole(role: FrontendRole): BackendRole {
   }
 }
 
-export async function loginApi(email: string, password: string) {
+import type { User as FrontendUser } from '@/types/user'
+
+export async function loginApi(email: string, password: string): Promise<{ token: string; user: FrontendUser }> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -38,16 +40,15 @@ export async function loginApi(email: string, password: string) {
     throw new Error(msg);
   }
   const data = await res.json();
-  return {
-    token: data.access_token as string,
-    user: {
-      id: data.user.id as string,
-      email: data.user.email as string,
-      role: mapRole(data.user.role as BackendRole),
-      name: (data.user.name as string) || (data.user.email as string),
-      gender: ((data.user.gender as string | undefined)?.toLowerCase() === 'female') ? 'female' : 'male',
-    },
-  };
+  const user: FrontendUser = {
+    id: data.user.id as string,
+    email: data.user.email as string,
+    role: mapRole(data.user.role as BackendRole),
+    name: (data.user.name as string) || (data.user.email as string),
+    gender: ((data.user.gender as string | undefined)?.toLowerCase() === 'female') ? 'female' : 'male',
+    aclRisk: (typeof data.user.aclRisk === 'number') ? data.user.aclRisk : null,
+  }
+  return { token: data.access_token as string, user };
 }
 
 // Helper function to get auth headers
@@ -155,7 +156,7 @@ export async function getUser(id: string): Promise<{ user: User }> {
 }
 
 // Current user profile
-export async function getMe(): Promise<{ user: { id: string; name?: string; email: string; role: BackendRole; teamId?: string; gender?: 'male' | 'female'; age?: number; heightCm?: number; weightKg?: number; bmi?: number } }> {
+export async function getMe(): Promise<{ user: { id: string; name?: string; email: string; role: BackendRole; teamId?: string; gender?: 'male' | 'female'; age?: number; heightCm?: number; weightKg?: number; bmi?: number; aclRisk?: number | null } }> {
   const res = await fetch(`${API_BASE}/users/me`, {
     headers: getAuthHeaders(),
   });
@@ -251,7 +252,7 @@ export async function resetUserPassword(id: string, newPassword: string): Promis
   return res.json();
 }
 
-export async function signupApi(email: string, password: string, role: FrontendRole) {
+export async function signupApi(email: string, password: string, role: FrontendRole): Promise<{ token: string; user: FrontendUser }> {
   const res = await fetch(`${API_BASE}/auth/signup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -266,16 +267,15 @@ export async function signupApi(email: string, password: string, role: FrontendR
     throw new Error(msg);
   }
   const data = await res.json();
-  return {
-    token: data.access_token as string,
-    user: {
-      id: data.user.id as string,
-      email: data.user.email as string,
-      role: mapRole(data.user.role as BackendRole),
-      name: (data.user.name as string) || (data.user.email as string),
-      gender: ((data.user.gender as string | undefined)?.toLowerCase() === 'female') ? 'female' : 'male',
-    },
+  const user: FrontendUser = {
+    id: data.user.id as string,
+    email: data.user.email as string,
+    role: mapRole(data.user.role as BackendRole),
+    name: (data.user.name as string) || (data.user.email as string),
+    gender: ((data.user.gender as string | undefined)?.toLowerCase() === 'female') ? 'female' : 'male',
+    aclRisk: (typeof data.user.aclRisk === 'number') ? Number(data.user.aclRisk) : null,
   };
+  return { token: data.access_token as string, user };
 }
 
 // Athlete onboarding API

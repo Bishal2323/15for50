@@ -13,6 +13,8 @@ const UserSchema = new Schema({
   teamId: { type: Schema.Types.ObjectId, ref: 'Team' },
   // Relation: for Athletes, coachId references their Coach user
   coachId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+  // Optional ACL reinjury risk percentage (1-100); computed via AI
+  aclRisk: { type: Number, min: 1, max: 100, default: null },
   passwordHash: { type: String, required: true },
 }, { timestamps: true });
 

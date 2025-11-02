@@ -11,4 +11,5 @@ export type User = {
   weightKg?: number;
   bmi?: number;
   avatar?: string;
+  aclRisk?: number | null;
 };

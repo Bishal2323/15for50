@@ -35,7 +35,6 @@ export function Login() {
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors },
   } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
@@ -51,6 +50,7 @@ export function Login() {
       const { token, user } = await loginApi(data.email, data.password)
       // store token for subsequent API calls
       localStorage.setItem('access_token', token)
+      // user is already typed as Frontend User from api.ts
       login(user)
       navigate(`/${user.role}`)
     } catch (err: any) {

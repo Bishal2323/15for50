@@ -1,14 +1,14 @@
 import { Schema } from 'mongoose';
 export declare const RiskScore: import("mongoose").Model<{
-    date: NativeDate;
     athleteId: import("mongoose").Types.ObjectId;
+    date: NativeDate;
     level: "Low" | "Moderate" | "High";
     score: number;
     violations: string[];
     recommendation?: string | null | undefined;
 } & import("mongoose").DefaultTimestampProps, {}, {}, {}, import("mongoose").Document<unknown, {}, {
-    date: NativeDate;
     athleteId: import("mongoose").Types.ObjectId;
+    date: NativeDate;
     level: "Low" | "Moderate" | "High";
     score: number;
     violations: string[];
@@ -16,8 +16,8 @@ export declare const RiskScore: import("mongoose").Model<{
 } & import("mongoose").DefaultTimestampProps, {}, {
     timestamps: true;
 }> & {
-    date: NativeDate;
     athleteId: import("mongoose").Types.ObjectId;
+    date: NativeDate;
     level: "Low" | "Moderate" | "High";
     score: number;
     violations: string[];
@@ -29,15 +29,15 @@ export declare const RiskScore: import("mongoose").Model<{
 }, Schema<any, import("mongoose").Model<any, any, any, any, any, any>, {}, {}, {}, {}, {
     timestamps: true;
 }, {
-    date: NativeDate;
     athleteId: import("mongoose").Types.ObjectId;
+    date: NativeDate;
     level: "Low" | "Moderate" | "High";
     score: number;
     violations: string[];
     recommendation?: string | null | undefined;
 } & import("mongoose").DefaultTimestampProps, import("mongoose").Document<unknown, {}, import("mongoose").FlatRecord<{
-    date: NativeDate;
     athleteId: import("mongoose").Types.ObjectId;
+    date: NativeDate;
     level: "Low" | "Moderate" | "High";
     score: number;
     violations: string[];
@@ -45,8 +45,8 @@ export declare const RiskScore: import("mongoose").Model<{
 } & import("mongoose").DefaultTimestampProps>, {}, import("mongoose").ResolveSchemaOptions<{
     timestamps: true;
 }>> & import("mongoose").FlatRecord<{
-    date: NativeDate;
     athleteId: import("mongoose").Types.ObjectId;
+    date: NativeDate;
     level: "Low" | "Moderate" | "High";
     score: number;
     violations: string[];

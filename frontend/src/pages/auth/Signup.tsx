@@ -48,12 +48,8 @@ export function Signup() {
     try {
       const { token, user } = await signupApi(data.email, data.password, data.role)
       localStorage.setItem('access_token', token)
-      // Narrow gender to the union type expected by the store
-      login({
-        id: user.id,
-        email: user.email,
-        role: user.role,
-      }, true)
+      // Store full user payload returned from backend (includes aclRisk if available)
+      login(user, true)
       navigate(`/${user.role}`)
     } catch (err: any) {
       setError(err?.message || "Signup failed. Please try again.")

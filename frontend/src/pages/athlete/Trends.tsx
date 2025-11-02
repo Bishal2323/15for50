@@ -1,4 +1,4 @@
-import { ArrowLeft, Calendar } from "lucide-react"
+import { ArrowLeft, Calendar, Shield, Info } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -7,8 +7,7 @@ import { Link } from "react-router-dom"
 import { useEffect, useMemo, useState } from "react"
 import { useUserStore } from "@/store/userStore"
 import { useRiskFactors } from "@/hooks/useRiskFactors"
-
-type RangeOption = '7d' | '30d'
+import { PieChart, Pie, Cell, ResponsiveContainer, Label } from 'recharts'
 
 type HistoryEntry = {
   metric: 'workloadManagement' | 'mentalRecovery' | string
@@ -21,29 +20,31 @@ type NoteEntry = { value?: string; note?: string; date?: string | Date }
 export function AthleteTrends() {
   const { user } = useUserStore()
   const { getRiskFactorHistory, getRiskFactors, loading } = useRiskFactors()
-  const [range, setRange] = useState<RangeOption>('7d')
   const [history, setHistory] = useState<HistoryEntry[]>([])
   const [selectedDate, setSelectedDate] = useState<string>('')
   const [notes, setNotes] = useState<NoteEntry[]>([])
+  const [currentFactors, setCurrentFactors] = useState<{
+    strengthAsymmetry?: number
+    neuromuscularControl?: number
+    anatomicalFixedRisk?: number
+  } | null>(null)
+  // Hover tooltips are overlayed and do not change layout height
 
   const dateFmt = (d: Date) => d.toISOString().split('T')[0]
   const addDays = (d: Date, delta: number) => new Date(d.getTime() + delta * 24 * 60 * 60 * 1000)
-
-  const rangeDates = useMemo(() => {
-    const end = new Date()
-    const start = range === '7d' ? addDays(end, -6) : addDays(end, -29)
-    return { start: dateFmt(start), end: dateFmt(end) }
-  }, [range])
 
   useEffect(() => {
     let mounted = true
     const fetchHistory = async () => {
       if (!user?.id) return
       try {
+        // Always show last 7 days
+        const end = new Date()
+        const start = addDays(end, -6)
         const data = await getRiskFactorHistory(user.id, {
           reportType: 'daily',
-          startDate: rangeDates.start,
-          endDate: rangeDates.end,
+          startDate: dateFmt(start),
+          endDate: dateFmt(end),
           limit: 200,
         })
         const entries: HistoryEntry[] = (data?.data?.history) || data?.history || data || []
@@ -65,7 +66,7 @@ export function AthleteTrends() {
     }
     fetchHistory()
     return () => { mounted = false }
-  }, [user?.id, rangeDates.start, rangeDates.end, getRiskFactorHistory])
+  }, [user?.id, getRiskFactorHistory])
 
   // Fetch notes once (and when user changes)
   useEffect(() => {
@@ -76,7 +77,15 @@ export function AthleteTrends() {
         const data = await getRiskFactors(user.id)
         const list: NoteEntry[] = (data as any)?.notes || []
         if (mounted) setNotes(list)
-      } catch {}
+        const cf = (data as any)?.currentRiskFactors
+        if (mounted && cf) {
+          setCurrentFactors({
+            strengthAsymmetry: Number(cf.strengthAsymmetry) || 0,
+            neuromuscularControl: Number(cf.neuromuscularControl) || 0,
+            anatomicalFixedRisk: Number(cf.anatomicalFixedRisk) || 0,
+          })
+        }
+      } catch { }
     }
     fetchNotes()
     return () => { mounted = false }
@@ -104,6 +113,34 @@ export function AthleteTrends() {
     return dayNotes
   }, [notes, selectedDate])
 
+  const clampFactor = (v?: number | null): number | null => {
+    if (v === null || v === undefined) return null
+    const num = Number(v)
+    if (!Number.isFinite(num)) return null
+    return Math.max(0, Math.min(10, num))
+  }
+
+  const strengthVal = useMemo(() => clampFactor(currentFactors?.strengthAsymmetry), [currentFactors])
+  const neuroVal = useMemo(() => clampFactor(currentFactors?.neuromuscularControl), [currentFactors])
+  const anatomicalVal = useMemo(() => clampFactor(currentFactors?.anatomicalFixedRisk), [currentFactors])
+
+  const makePieData = (val: number | null) => {
+    if (val === null) return [{ name: 'N/A', value: 10 }]
+    const filled = Math.max(0, Math.min(10, val))
+    const remainder = Math.max(0, 10 - filled)
+    return [
+      { name: 'Filled', value: filled },
+      { name: 'Remaining', value: remainder },
+    ]
+  }
+
+  const colors = {
+    strength: '#6366f1',
+    neuro: '#f59e0b',
+    anatomical: '#10b981',
+    remainder: '#e5e7eb',
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -117,43 +154,191 @@ export function AthleteTrends() {
           <h1 className="text-3xl font-bold text-foreground">Risk Trends</h1>
           <p className="text-muted-foreground">Workload management and mental recovery over time</p>
         </div>
-        <div className="flex gap-2">
-          <Select value={range} onValueChange={(v) => setRange(v as RangeOption)}>
-            <SelectTrigger className="w-36">
-              <SelectValue placeholder="Select range" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="7d">Last 7 days</SelectItem>
-              <SelectItem value="30d">Last month</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={selectedDate} onValueChange={(v) => setSelectedDate(v)}>
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="Select date" />
-            </SelectTrigger>
-            <SelectContent>
-              {availableDates.map((d) => (
-                <SelectItem key={d} value={d}>{d}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
       </div>
+
+      {/* ACL Risk Highlight */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Shield className="h-5 w-5" /> ACL Risk
+          </CardTitle>
+          <CardDescription>
+            This is a single, high-importance indicator derived from five factors:
+            workload management, mental recovery, strength asymmetry, neuromuscular control, and anatomical risk.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex items-center gap-6">
+            <div>
+              <div className="flex items-center gap-2">
+                <div className="text-sm text-muted-foreground">Current ACL Risk</div>
+                <div className="relative group">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    aria-label="About current ACL risk"
+                  >
+                    <Info className="h-4 w-4" />
+                  </Button>
+                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-2 w-64 rounded-md border bg-popover text-popover-foreground shadow-md p-2 opacity-0 group-hover:opacity-100 z-50">
+                    ACL risk combines multiple contributors. Anatomical and strength asymmetry have strong influence,
+                    neuromuscular control is also important, while mental recovery and workload management contribute with lower weight.
+                  </div>
+                </div>
+              </div>
+              <div className="text-4xl font-bold">
+                {typeof user?.aclRisk === 'number' ? `${Math.round(user.aclRisk)}%` : '—'}
+              </div>
+            </div>
+          </div>
+
+          {/* Separate factor pies */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Strength Asymmetry */}
+            <div className="w-full h-[220px]">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="text-sm font-medium">Strength Asymmetry</div>
+                <div className="relative group">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    aria-label="About strength asymmetry"
+                  >
+                    <Info className="h-4 w-4" />
+                  </Button>
+                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-2 w-64 rounded-md border bg-popover text-popover-foreground shadow-md p-2 opacity-0 group-hover:opacity-100 z-50">
+                    Captures between-limb strength symmetry and H:Q ratio, including LSI metrics (quadriceps/hamstrings, hop tests, MVIC).
+                  </div>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie
+                    data={makePieData(strengthVal)}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={0}
+                    outerRadius={80}
+                  >
+                    {makePieData(strengthVal).map((_, idx) => (
+                      <Cell key={`strength-${idx}`} fill={idx === 0 ? colors.strength : colors.remainder} />
+                    ))}
+                    <Label value={strengthVal === null ? 'Data unavailable' : String(strengthVal)} position="center" />
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Neuromuscular Control */}
+            <div className="w-full h-[220px]">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="text-sm font-medium">Neuromuscular Control</div>
+                <div className="relative group">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    aria-label="About neuromuscular control"
+                  >
+                    <Info className="h-4 w-4" />
+                  </Button>
+                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-2 w-64 rounded-md border bg-popover text-popover-foreground shadow-md p-2 opacity-0 group-hover:opacity-100 z-50">
+                    Reflects movement quality: dynamic knee valgus, LESS score, Y-Balance, trunk control, CMJ power, and stability.
+                  </div>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie
+                    data={makePieData(neuroVal)}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={0}
+                    outerRadius={80}
+                  >
+                    {makePieData(neuroVal).map((_, idx) => (
+                      <Cell key={`neuro-${idx}`} fill={idx === 0 ? colors.neuro : colors.remainder} />
+                    ))}
+                    <Label value={neuroVal === null ? 'Data unavailable' : String(neuroVal)} position="center" />
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Anatomical Risk */}
+            <div className="w-full h-[220px]">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="text-sm font-medium">Anatomical Risk</div>
+                <div className="relative group">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    aria-label="About anatomical risk"
+                  >
+                    <Info className="h-4 w-4" />
+                  </Button>
+                  <div className="pointer-events-none absolute left-1/2 top-full -translate-x-1/2 mt-2 w-64 rounded-md border bg-popover text-popover-foreground shadow-md p-2 opacity-0 group-hover:opacity-100 z-50">
+                    Includes fixed traits like joint laxity (Beighton), notch width, tibial slope, and knee laxity—often non‑modifiable.
+                  </div>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie
+                    data={makePieData(anatomicalVal)}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={0}
+                    outerRadius={80}
+                  >
+                    {makePieData(anatomicalVal).map((_, idx) => (
+                      <Cell key={`anatomical-${idx}`} fill={idx === 0 ? colors.anatomical : colors.remainder} />
+                    ))}
+                    <Label value={anatomicalVal === null ? 'Data unavailable' : String(anatomicalVal)} position="center" />
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Main Chart */}
       <AthleteRiskFactorChart
         data={chartData}
         title="Daily Risk Factors"
-        description={loading ? 'Loading...' : `Showing ${range === '7d' ? 'last 7 days' : 'last month'} (daily)`}
+        description={loading ? 'Loading...' : 'Showing last 7 days (daily)'}
         height={380}
       />
 
       {/* Notes for selected date */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Calendar className="h-5 w-5" /> Notes on {selectedDate || '—'}
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Calendar className="h-5 w-5" /> Notes
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Date</span>
+              <Select value={selectedDate} onValueChange={(v) => setSelectedDate(v)}>
+                <SelectTrigger className="w-40">
+                  <SelectValue placeholder="Select date" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableDates.map((d) => (
+                    <SelectItem key={d} value={d}>{d}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
           <CardDescription>Contextual notes from daily reports</CardDescription>
         </CardHeader>
         <CardContent>

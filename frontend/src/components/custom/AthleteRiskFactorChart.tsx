@@ -3,8 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 
 export interface AthleteRiskPoint {
   date: string
-  workloadManagement: number
-  mentalRecovery: number
+  workloadManagement?: number
+  mentalRecovery?: number
 }
 
 interface AthleteRiskFactorChartProps {

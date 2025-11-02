@@ -1,4 +1,4 @@
-import { BarChart3, TrendingUp, Users, AlertTriangle, Calendar, Download } from "lucide-react"
+import { TrendingUp, Users, AlertTriangle, Calendar, Download } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"

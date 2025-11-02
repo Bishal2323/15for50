@@ -19,12 +19,7 @@ const systemOverview = {
   securityAlerts: 2
 }
 
-const userStats = [
-  { role: "Athletes", count: 98, percentage: 63, color: "bg-blue-500" },
-  { role: "Coaches", count: 24, percentage: 15, color: "bg-green-500" },
-  { role: "Physiotherapists", count: 18, percentage: 12, color: "bg-purple-500" },
-  { role: "Administrators", count: 16, percentage: 10, color: "bg-red-500" },
-]
+// Removed unused mock userStats
 
 const systemMetrics = [
   { date: "Week 1", risk: 32, users: 145 },

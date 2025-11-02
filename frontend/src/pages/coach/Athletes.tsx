@@ -133,12 +133,12 @@ export function CoachAthletes() {
             <Input value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="athlete@example.com" />
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setAddOpen(false)} disabled={addMutation.isLoading}>Cancel</Button>
+            <Button variant="outline" onClick={() => setAddOpen(false)} disabled={addMutation.isPending}>Cancel</Button>
             <Button
               onClick={() => addMutation.mutate()}
-              disabled={addMutation.isLoading || !newEmail}
+              disabled={addMutation.isPending || !newEmail}
             >
-              {addMutation.isLoading ? 'Sending...' : 'Send Invite'}
+              {addMutation.isPending ? 'Sending...' : 'Send Invite'}
             </Button>
           </div>
           {addMutation.isError && (

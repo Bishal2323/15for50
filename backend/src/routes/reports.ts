@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/auth';
 import { computeRisk } from '../services/risk';
 import { RiskFactor } from '../models/riskFactor.model';
 import { loadEnv } from '../setup/env';
+import { User } from '../models/user.model';
 
 const router = Router();
 
@@ -32,6 +33,12 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
   const env = loadEnv();
   const user = (req as any).user;
   const payload = req.body;
+  // Fetch current user to read aclRisk prior (null -> 0)
+  let currentAclRisk = 0;
+  try {
+    const dbUser = await User.findById(user.id).lean();
+    currentAclRisk = typeof dbUser?.aclRisk === 'number' ? dbUser!.aclRisk! : 0;
+  } catch { }
 
   // Use provided date or default to current date
   const reportDate = payload.date ? new Date(payload.date) : new Date();
@@ -152,8 +159,36 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
     trainingDuration: avg(previousReports.map((r: any) => r.trainingDuration || 0)),
   };
 
+  // RiskFactor averages for strength/neuromuscular and anatomical context
+  const rfDoc = await RiskFactor.findOrCreateByAthleteId(user.id);
+  const avgMetric = (arr: Array<{ value: number }> = []) => {
+    const vals = (arr || []).map(x => Number(x.value)).filter(v => Number.isFinite(v));
+    return vals.length ? Number((vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(2)) : 0;
+  };
+  const strengthAsymmetryAvg = avgMetric(rfDoc.strengthAsymmetry as any);
+  const neuromuscularControlAvg = avgMetric(rfDoc.neuromuscularControl as any);
+  const anatomicalAvg = avgMetric(rfDoc.anatomicalFixedRisk as any);
+  const strengthNote = strengthAsymmetryAvg === 0 && !(rfDoc.strengthAsymmetry && rfDoc.strengthAsymmetry.length)
+    ? 'No past strengthAsymmetry data provided by user; treat as 0 by default.'
+    : '';
+  const neuroNote = neuromuscularControlAvg === 0 && !(rfDoc.neuromuscularControl && rfDoc.neuromuscularControl.length)
+    ? 'No past neuromuscularControl data provided by user; treat as 0 by default.'
+    : '';
+  const anatomicalNote = anatomicalAvg === 0 && !(rfDoc.anatomicalFixedRisk && rfDoc.anatomicalFixedRisk.length)
+    ? 'AnatomicalRisk constitutes 30%, but no data provided; treat as 0 by default.'
+    : '';
+
   // Prepare prompt for Gemini
-  const prompt = `You are an expert sports performance analyst. Based on the CURRENT daily athlete report and HISTORICAL AVERAGES, estimate and return STRICT JSON: {"workloadManagement": <integer 1-10>, "mentalRecovery": <integer 1-10>, "recommendation": "<short actionable tip>"}.
+  const prompt = `You are an expert sports performance analyst. Based on the CURRENT daily athlete report and HISTORICAL AVERAGES, estimate and return STRICT JSON: {"workloadManagement": <integer 1-10>, "mentalRecovery": <integer 1-10>, "aclRisk": <integer 1-100>, "recommendation": "<short actionable tip>"}.
+
+IMPORTANT WEIGHTING NOTES:
+- workloadManagement + mentalRecovery together constitute 20% of aclRisk.
+- strengthAsymmetry + neuromuscularControl together constitute 50% of aclRisk. If no past data is provided for either, treat that category as 0 by default.
+- anatomicalRisk constitutes 30% of aclRisk. If no anatomical data is available, treat it as 0 by default.
+
+Do NOT generalize categories. Use the named categories with the weights above.
+
+PRIOR ACL RISK: Use currentAclRisk as prior; if it is 0 it means unknown. Do NOT skew aclRisk too much if the provided data points are not strongly indicative. Prefer small adjustments around currentAclRisk unless signals are significant.
 
 CURRENT REPORT (fields and scales noted): ${JSON.stringify({
     sleepHours: reportData.sleepHours, // hours 0-24
@@ -169,10 +204,15 @@ CURRENT REPORT (fields and scales noted): ${JSON.stringify({
 
 HISTORICAL AVERAGES (same fields): ${JSON.stringify(historicalAverages)}
 
+PAST STRENGTH/NEURO AVERAGES (1-10 scales from RiskFactor): ${JSON.stringify({ strengthAsymmetryAvg, neuromuscularControlAvg })}
+${strengthNote}${strengthNote && (neuroNote || anatomicalNote) ? ' ' : ''}${neuroNote}${(strengthNote || neuroNote) && anatomicalNote ? ' ' : ''}${anatomicalNote}
+
+CURRENT ACL RISK PRIOR (0-100, 0 means unknown): ${currentAclRisk}
+
 Output only JSON, no extra text.`;
 
   // Call Gemini API
-  let geminiResult: { workloadManagement: number; mentalRecovery: number; note?: string } | null = null;
+  let geminiResult: { workloadManagement: number; mentalRecovery: number; aclRisk?: number; note?: string } | null = null;
 
   console.log(prompt);
 
@@ -199,17 +239,20 @@ Output only JSON, no extra text.`;
         const parsed = JSON.parse(maybeJson);
         const wm = Math.max(1, Math.min(10, Math.round(Number(parsed.workloadManagement))));
         const mr = Math.max(1, Math.min(10, Math.round(Number(parsed.mentalRecovery))));
+        const acl = parsed.aclRisk !== undefined ? Math.max(1, Math.min(100, Math.round(Number(parsed.aclRisk)))) : undefined;
         const note = typeof parsed.note === 'string' ? parsed.note : (typeof parsed.recommendation === 'string' ? parsed.recommendation : undefined);
-        geminiResult = { workloadManagement: wm, mentalRecovery: mr, note };
+        geminiResult = { workloadManagement: wm, mentalRecovery: mr, aclRisk: acl, note };
       } catch {
         // If model returns non-JSON, attempt simple extraction or fallback
         const wmMatch = text.match(/"workloadManagement"\s*:\s*(\d{1,2})/i) || text.match(/workloadManagement\D(\d{1,2})/i);
         const mrMatch = text.match(/"mentalRecovery"\s*:\s*(\d{1,2})/i) || text.match(/mentalRecovery\D(\d{1,2})/i);
+        const aclMatch = text.match(/"aclRisk"\s*:\s*(\d{1,3})/i) || text.match(/aclRisk\D(\d{1,3})/i);
         const noteMatch = text.match(/"note"\s*:\s*"([^"\n]+)"/i) || text.match(/"recommendation"\s*:\s*"([^"\n]+)"/i);
         const wm = wmMatch ? Math.max(1, Math.min(10, Number(wmMatch[1]))) : 5;
         const mr = mrMatch ? Math.max(1, Math.min(10, Number(mrMatch[1]))) : 5;
+        const acl = aclMatch ? Math.max(1, Math.min(100, Number(aclMatch[1]))) : undefined;
         const note = noteMatch ? noteMatch[1] : undefined;
-        geminiResult = { workloadManagement: wm, mentalRecovery: mr, note: note || text.slice(0, 300) };
+        geminiResult = { workloadManagement: wm, mentalRecovery: mr, aclRisk: acl, note: note || text.slice(0, 300) };
       }
     }
   } catch (err) {
@@ -244,6 +287,15 @@ Output only JSON, no extra text.`;
       }
     } catch (e) {
       console.error('Failed to persist RiskFactor entry:', e);
+    }
+  }
+
+  // Update user's aclRisk if provided by Gemini
+  if (geminiResult?.aclRisk !== undefined && Number.isFinite(geminiResult.aclRisk)) {
+    try {
+      await User.findByIdAndUpdate(user.id, { $set: { aclRisk: geminiResult.aclRisk } });
+    } catch (e) {
+      console.error('Failed to update user aclRisk:', e);
     }
   }
 

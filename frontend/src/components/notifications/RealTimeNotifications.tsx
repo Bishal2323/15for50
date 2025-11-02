@@ -141,8 +141,6 @@ export function RealTimeNotifications() {
     {newNotification && (
       <NotificationPopup
         notification={newNotification}
-        onAccept={() => acceptMutation.mutate(newNotification._id)}
-        onDecline={() => declineMutation.mutate(newNotification._id)}
         onClose={clearNewNotification}
       />
     )}

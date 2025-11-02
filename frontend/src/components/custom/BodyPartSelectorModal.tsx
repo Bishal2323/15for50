@@ -1,9 +1,9 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import type { BodyPartKey } from "@/components/BodyModel";
+import type { BodyPartKey } from "@/components/custom/BodyModel";
 
 type BodyPartSelectorModalProps = {
   open: boolean;
@@ -83,4 +83,3 @@ export function BodyPartSelectorModal({ open, onClose, onSelect, selected }: Bod
 }
 
 export default BodyPartSelectorModal;
-

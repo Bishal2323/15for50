@@ -19,6 +19,8 @@ function loadEnv() {
         AWS_REGION: process.env.AWS_REGION || 'us-east-1',
         S3_BUCKET_NAME: process.env.S3_BUCKET_NAME || 'acl-monitor-files',
         SEED_DEMO: (process.env.SEED_DEMO || 'true') === 'true',
+        GEMINI_API_URL: process.env.GEMINI_API_URL || 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
+        GEMINI_API_KEY: process.env.GEMINI_API_KEY || 'AIzaSyCnLBSZ7KioxdpLrebUpciYg_NzolWqJVk',
     };
 }
 //# sourceMappingURL=env.js.map

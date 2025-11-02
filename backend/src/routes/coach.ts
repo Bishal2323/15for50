@@ -1,9 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { requireAuth, requireRole } from '../middleware/auth';
 import { RiskScore } from '../models/riskScore.model';
-import { User } from '../models/user.model';
 import { Notification } from '../models/notification.model';
 import { CoachWeeklyReports } from '../models/coachWeeklyReport.model';
+import { RiskFactor } from '../models/riskFactor.model';
+import { loadEnv } from '../setup/env';
+import { User } from '../models/user.model';
+import { PhysioReports } from '../models/physioReport.model';
 import bcrypt from 'bcryptjs';
 
 const router = Router();
@@ -209,6 +212,7 @@ router.get('/weekly-reports', requireAuth, requireRole('Coach'), async (req: Req
 // Weekly Reports: Create a weekly report for current coach
 router.post('/weekly-reports', requireAuth, requireRole('Coach'), async (req: Request, res: Response) => {
   try {
+    const env = loadEnv();
     const coach = (req as any).user;
     if (!coach?.id) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -242,6 +246,27 @@ router.post('/weekly-reports', requireAuth, requireRole('Coach'), async (req: Re
 
     // Find or create the per-athlete weekly reports doc
     let doc = await CoachWeeklyReports.findOne({ athleteId });
+
+    // Enforce one weekly report per athlete per week by checking range overlap
+    if (doc && Array.isArray(doc.coachMetrics)) {
+      const overlaps = doc.coachMetrics.some((m: any) => {
+        try {
+          const s = new Date(m.weekStart);
+          const e = new Date(m.weekEnd || new Date(s.getTime() + 6 * 24 * 60 * 60 * 1000));
+          return s <= computedWeekEnd && e >= weekStart; // ranges overlap
+        } catch {
+          return false;
+        }
+      });
+      if (overlaps) {
+        return res.status(409).json({
+          error: 'Weekly report already exists for this athlete in the specified week',
+          week: {
+            requested: { start: weekStart.toISOString(), end: computedWeekEnd.toISOString() }
+          }
+        });
+      }
+    }
     const entry = {
       weekStart,
       weekEnd: computedWeekEnd,
@@ -272,7 +297,163 @@ router.post('/weekly-reports', requireAuth, requireRole('Coach'), async (req: Re
     }
 
     const created = (doc.coachMetrics || []).slice(-1)[0];
-    return res.status(201).json({ report: { ...created, athleteId }, message: 'Weekly report created' });
+
+    // Build averages from RiskFactor (workloadManagement, mentalRecovery)
+    const rfDoc = await RiskFactor.findOrCreateByAthleteId(athleteId);
+    const avg = (arr: Array<{ value: number }> = []) => {
+      if (!arr || arr.length === 0) return 0;
+      return Math.round(arr.reduce((sum, e) => sum + (Number(e.value) || 0), 0) / arr.length);
+    };
+    const workloadAvg = avg(rfDoc.workloadManagement as any);
+    const mentalAvg = avg(rfDoc.mentalRecovery as any);
+
+    // Average past coach weekly metrics for context
+    const coachEntries = (doc.coachMetrics || []).filter(Boolean);
+    const coachMetricKeys = [
+      'acwr', 'quadricepsLsi', 'hamstringsLsi', 'singleLegHopLsi', 'yBalanceAnteriorDiffCm', 'lessScore', 'slsStabilitySec'
+    ] as const;
+    const coachMetricsAverage: Record<string, number> = {};
+    for (const key of coachMetricKeys) {
+      const values = coachEntries.map((e: any) => Number(e?.metrics?.[key] ?? NaN)).filter(v => Number.isFinite(v));
+      coachMetricsAverage[key] = values.length ? Number((values.reduce((s, v) => s + v, 0) / values.length).toFixed(2)) : 0;
+    }
+
+    // Fetch current athlete ACL risk prior (null/undefined -> 0)
+    let currentAclRisk = 0;
+    try {
+      const dbAthlete = await User.findById(athleteId).lean();
+      currentAclRisk = typeof dbAthlete?.aclRisk === 'number' ? dbAthlete.aclRisk! : 0;
+    } catch { }
+
+    // Pull latest physio anatomicalRisk if present
+    let physioAnatomicalRiskText = '';
+    try {
+      const physioDoc = await PhysioReports.findOne({ athleteId }).lean();
+      const entries = (physioDoc?.physioMetrics || []).filter(Boolean);
+      const sorted = entries.sort((a: any, b: any) => new Date(b.reportDate).getTime() - new Date(a.reportDate).getTime());
+      const latest = sorted.find((e: any) => e?.metrics?.anatomicalRisk);
+      if (latest?.metrics?.anatomicalRisk) {
+        const d = new Date(latest.reportDate).toISOString().slice(0, 10);
+        physioAnatomicalRiskText = `PHYSIO ANATOMICAL RISK (30% weight): ${latest.metrics.anatomicalRisk} (from ${d}).`;
+      } else {
+        physioAnatomicalRiskText = `ANATOMICAL RISK (30% weight): No physio anatomical data available for this period. If data is present, incorporate it at 30% importance.`;
+      }
+    } catch {
+      physioAnatomicalRiskText = `ANATOMICAL RISK (30% weight): No physio anatomical data available. If data is present, incorporate it at 30% importance.`;
+    }
+
+    // Prompt for Gemini
+    const prompt = `You are analyzing a weekly ACL rehab training report for an athlete.
+
+CURRENT WEEK WINDOW:
+  weekStart: ${weekStart?.toISOString().slice(0, 10)}
+  weekEnd: ${computedWeekEnd.toISOString().slice(0, 10)}
+
+CURRENT WEEK COACH METRICS:
+${JSON.stringify(entry.metrics)}
+
+COACH AGGREGATED (provided, optional):
+${JSON.stringify(entry.aggregated || {})}
+
+HISTORICAL AVERAGES FROM RISK FACTORS:
+  workloadManagementAvg (1-10): ${workloadAvg}
+  mentalRecoveryAvg (1-10): ${mentalAvg}
+
+PAST COACH METRICS AVERAGES:
+${JSON.stringify(coachMetricsAverage)}
+
+CURRENT ACL RISK PRIOR (0-100, 0 means unknown): ${currentAclRisk}
+
+${physioAnatomicalRiskText}
+
+WEIGHTING NOTE: For ACL risk this week, COACH METRICS AND CONTEXT ABOVE contribute about 50% of the final risk, and the remaining 50% is inferred from other signals (e.g., workload/mental averages, recovery indicators). You MAY skew from currentAclRisk if weekly values are off by a lot; otherwise prefer modest adjustments.
+
+Using this context, estimate weekly values (1-10) for:
+- strengthAsymmetry: overall strength balance asymmetry risk
+- neuromuscularControl: movement control quality and stability risk
+Also estimate weekly ACL reinjury risk percentage (1-100): "aclRisk".
+
+Return ONLY valid JSON with keys: { "strengthAsymmetry": number, "neuromuscularControl": number, "aclRisk": number, "note": string }.`;
+
+    let aiResult: { strengthAsymmetry: number; neuromuscularControl: number; aclRisk?: number; note?: string } | null = null;
+    try {
+      const resp = await fetch(env.GEMINI_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': env.GEMINI_API_KEY,
+        },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json' }
+        }),
+      });
+      const data = await resp.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text as string | undefined;
+      if (text) {
+        const fence = text.match(/```(?:json)?\n([\s\S]*?)\n```/i);
+        const maybeJson = fence ? fence[1].trim() : text.trim();
+        try {
+          const parsed = JSON.parse(maybeJson);
+          const sa = Math.max(1, Math.min(10, Math.round(Number(parsed.strengthAsymmetry))));
+          const nc = Math.max(1, Math.min(10, Math.round(Number(parsed.neuromuscularControl))));
+          const acl = parsed.aclRisk !== undefined ? Math.max(1, Math.min(100, Math.round(Number(parsed.aclRisk)))) : undefined;
+          const note = typeof parsed.note === 'string' ? parsed.note : undefined;
+          aiResult = { strengthAsymmetry: sa, neuromuscularControl: nc, aclRisk: acl, note };
+        } catch {
+          const saMatch = text.match(/"strengthAsymmetry"\s*:\s*(\d{1,2})/i) || text.match(/strengthAsymmetry\D(\d{1,2})/i);
+          const ncMatch = text.match(/"neuromuscularControl"\s*:\s*(\d{1,2})/i) || text.match(/neuromuscularControl\D(\d{1,2})/i);
+          const aclMatch = text.match(/"aclRisk"\s*:\s*(\d{1,3})/i) || text.match(/aclRisk\D(\d{1,3})/i);
+          const noteMatch = text.match(/"note"\s*:\s*"([^"\n]+)"/i);
+          const sa = saMatch ? Math.max(1, Math.min(10, Number(saMatch[1]))) : 5;
+          const nc = ncMatch ? Math.max(1, Math.min(10, Number(ncMatch[1]))) : 5;
+          const acl = aclMatch ? Math.max(1, Math.min(100, Number(aclMatch[1]))) : undefined;
+          const note = noteMatch ? noteMatch[1] : undefined;
+          aiResult = { strengthAsymmetry: sa, neuromuscularControl: nc, aclRisk: acl, note: note || text.slice(0, 300) };
+        }
+      }
+    } catch (err) {
+      console.error('Gemini API error (weekly):', err);
+    }
+
+    // Persist into RiskFactor weekly fields with reportDate (use weekEnd)
+    let riskFactorEntry: any = null;
+    if (aiResult) {
+      try {
+        const entryDate = computedWeekEnd;
+        const entryDateStr = entryDate.toDateString();
+        const hasWeekly = (
+          (rfDoc.strengthAsymmetry || []).some((e: any) => e.reportType === 'weekly' && new Date(e.date).toDateString() === entryDateStr) ||
+          (rfDoc.neuromuscularControl || []).some((e: any) => e.reportType === 'weekly' && new Date(e.date).toDateString() === entryDateStr)
+        );
+        if (!hasWeekly) {
+          rfDoc.strengthAsymmetry.push({ value: aiResult.strengthAsymmetry, date: entryDate, reportType: 'weekly' });
+          rfDoc.neuromuscularControl.push({ value: aiResult.neuromuscularControl, date: entryDate, reportType: 'weekly' });
+          if ((aiResult as any).note) {
+            rfDoc.notes.push({ value: (aiResult as any).note, date: entryDate });
+          }
+          await rfDoc.save();
+          riskFactorEntry = {
+            strengthAsymmetry: rfDoc.strengthAsymmetry.slice(-1)[0],
+            neuromuscularControl: rfDoc.neuromuscularControl.slice(-1)[0],
+            note: (rfDoc.notes || []).slice(-1)[0] || undefined,
+          };
+        }
+      } catch (e) {
+        console.error('Failed to persist weekly RiskFactor entry:', e);
+      }
+    }
+
+    // Update athlete's aclRisk if provided
+    if (aiResult?.aclRisk !== undefined && Number.isFinite(aiResult.aclRisk)) {
+      try {
+        await User.findByIdAndUpdate(athleteId, { $set: { aclRisk: aiResult.aclRisk } });
+      } catch (e) {
+        console.error('Failed to update athlete aclRisk:', e);
+      }
+    }
+
+    return res.status(201).json({ report: { ...created, athleteId }, aiFactors: aiResult || undefined, riskFactorEntry: riskFactorEntry || undefined, message: 'Weekly report created' });
   } catch (error) {
     console.error('Error creating weekly report:', error);
     return res.status(500).json({ error: 'Failed to create weekly report' });

@@ -50,13 +50,12 @@ export function useRealTimeNotifications() {
               
             case 'notification':
               if (data.data && !Array.isArray(data.data)) {
+                const notif = data.data as Notification;
                 setNotifications(prev => {
-                  // Check if notification already exists to avoid duplicates
-                  const exists = prev.some(n => n._id === data.data!._id);
+                  const exists = prev.some(n => n._id === notif._id);
                   if (!exists) {
-                    // Set as new notification for popup display
-                    setNewNotification(data.data!);
-                    return [data.data!, ...prev];
+                    setNewNotification(notif);
+                    return [notif, ...prev];
                   }
                   return prev;
                 });

@@ -21,7 +21,8 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
         age: user.age,
         heightCm: user.heightCm,
         weightKg: user.weightKg,
-        bmi: user.bmi
+        bmi: user.bmi,
+        aclRisk: user.aclRisk ?? null
       } 
     });
   } catch (error) {

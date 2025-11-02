@@ -1,7 +1,15 @@
 type Report = {
     trainingDuration: number;
-    fatigueLevel: number;
+    trainingRPE: number;
+    trainingLoadSRPE: number;
     sleepHours: number;
+    sleepQuality: number;
+    fatigueLevel: number;
+    stressLevel: number;
+    painLevel?: number;
+    localSoreness?: number;
+    readinessToTrain: number;
+    mood: number;
     kneeStabilityL: number;
     kneeStabilityR: number;
 };

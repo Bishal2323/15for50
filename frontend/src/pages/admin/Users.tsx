@@ -6,17 +6,10 @@ import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
-  Search,
-  Filter,
   Plus,
-  MoreHorizontal,
-  UserPlus,
-  Download,
   Edit,
   Trash2,
   Shield,
-  ShieldCheck,
-  ShieldX,
   AlertTriangle,
   User,
   Users,
@@ -73,18 +66,7 @@ const getRoleColor = (role: string) => {
   }
 }
 
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case "active":
-      return "safe"
-    case "inactive":
-      return "monitor"
-    case "suspended":
-      return "high"
-    default:
-      return "outline"
-  }
-}
+// Removed unused getStatusColor helper
 
 export function AdminUsers() {
   const [users, setUsers] = useState<UserType[]>([])
@@ -92,8 +74,8 @@ export function AdminUsers() {
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [roleFilter, setRoleFilter] = useState<string>('all')
-  const [currentPage, setCurrentPage] = useState(1)
-  const [totalPages, setTotalPages] = useState(1)
+  const [currentPage] = useState(1)
+  const [, setTotalPages] = useState(1)
   const [editingUser, setEditingUser] = useState<UserType | null>(null)
   const [editEmail, setEditEmail] = useState<string>('')
   const [editRole, setEditRole] = useState<BackendRole>('Athlete')

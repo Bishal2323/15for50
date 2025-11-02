@@ -1,5 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom"
+import { useEffect } from "react"
 import { useUserStore } from "@/store/userStore"
+import { getMe } from "@/lib/api"
 import { DashboardLayout } from "@/components/layout/DashboardLayout"
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute"
 
@@ -35,6 +37,33 @@ import './App.css'
 
 function App() {
   const { isAuthenticated, user } = useUserStore()
+  const updateUser = useUserStore((s) => s.updateUser)
+
+  // Hydrate user profile from backend on app load to ensure fields like aclRisk are present
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      if (!isAuthenticated) return
+      try {
+        const res = await getMe()
+        if (!active) return
+        const u = res.user
+        updateUser({
+          name: u.name,
+          gender: u.gender,
+          age: u.age,
+          heightCm: u.heightCm,
+          weightKg: u.weightKg,
+          bmi: u.bmi,
+          // Only set aclRisk if numeric; undefined keeps current store value
+          aclRisk: typeof u.aclRisk === 'number' ? u.aclRisk : undefined,
+        })
+      } catch {
+        // ignore failures silently; UI can still work off existing store
+      }
+    })()
+    return () => { active = false }
+  }, [isAuthenticated])
 
   return (
     <Router>

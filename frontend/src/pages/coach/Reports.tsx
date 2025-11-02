@@ -51,9 +51,7 @@ function toWeekStart(dateStr: string): string {
   return monday.toISOString().slice(0, 10)
 }
 
-function storageKey(coachId: string, athleteId: string, weekStart: string) {
-  return `weekly_report:${coachId}:${athleteId}:${weekStart}`
-}
+// storageKey helper removed (unused)
 
 export function CoachReports() {
   const { user } = useUserStore()
@@ -117,7 +115,7 @@ export function CoachReports() {
         return
       }
       try {
-        const res = await createCoachWeeklyReport({
+        await createCoachWeeklyReport({
           athleteEmail: emailToUse,
           weekStart: wkStart,
           title: `Week of ${wkStart}`,
@@ -144,7 +142,7 @@ export function CoachReports() {
     }
 
     try {
-      const res = await createCoachWeeklyReport({
+      await createCoachWeeklyReport({
         athleteEmail,
         weekStart: wkStart,
         title: `Week of ${wkStart}`,

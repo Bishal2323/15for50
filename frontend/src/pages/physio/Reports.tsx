@@ -14,7 +14,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { useUserStore } from "@/store/userStore"
 import { getPhysioUsers, type User, createPhysioReport, getPhysioReports } from "@/lib/api"
 import { Modal } from "@/components/ui/modal"
 // RiskFactorModal removed: manual risk submission no longer collected from users
@@ -37,8 +36,7 @@ const physioSchema = z.object({
 type PhysioForm = z.infer<typeof physioSchema>
 
 export function PhysioReports() {
-  const { user } = useUserStore()
-  const physioId = user?.id || "physio"
+  // const { user } = useUserStore()
 
   const [loadError, setLoadError] = useState<string>("")
   const [searchOpen, setSearchOpen] = useState(false)

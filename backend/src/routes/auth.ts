@@ -27,7 +27,7 @@ router.post('/signup', async (req: Request, res: Response) => {
   const secret = env.JWT_SECRET as Secret;
   const options = { expiresIn: env.JWT_EXPIRES_IN } as SignOptions;
   const token = jwt.sign(payload, secret, options);
-  return res.status(201).json({ access_token: token, user: { id: user.id, email: user.email, role: user.role, } });
+  return res.status(201).json({ access_token: token, user: { id: user.id, email: user.email, role: user.role, aclRisk: user.aclRisk ?? null } });
 });
 
 router.post('/login', async (req: Request, res: Response) => {
@@ -46,7 +46,7 @@ router.post('/login', async (req: Request, res: Response) => {
     : env.JWT_EXPIRES_IN;
   const options: SignOptions = { expiresIn: expiresInVal as any };
   const token = jwt.sign(payload, secret, options);
-  return res.json({ access_token: token, user: { id: user.id, name: user.name, email: user.email, role: user.role, gender: user.gender } });
+  return res.json({ access_token: token, user: { id: user.id, name: user.name, email: user.email, role: user.role, gender: user.gender, aclRisk: user.aclRisk ?? null } });
 });
 
 // Athlete onboarding: optionally capture height/weight/name/gender and compute BMI

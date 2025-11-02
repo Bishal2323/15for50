@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start": "node dist/server.js",
+    "start": "node dist/src/server.js",
     "build": "tsc -p tsconfig.build.json",
     "start:dev": "ts-node src/server.ts",
     "dev": "nodemon --config nodemon.json"

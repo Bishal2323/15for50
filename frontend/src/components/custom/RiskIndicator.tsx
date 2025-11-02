@@ -1,5 +1,4 @@
 import { AlertTriangle, CheckCircle, AlertCircle } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { cn } from "@/lib/utils"
 

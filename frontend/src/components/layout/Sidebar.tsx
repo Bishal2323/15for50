@@ -1,4 +1,3 @@
-import { useState } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { 
   BarChart3, 
@@ -20,7 +19,6 @@ import {
   Bell
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui/button"
 import type { UserRole } from "../../types/user"
 
 interface SidebarProps {
@@ -29,7 +27,7 @@ interface SidebarProps {
   userRole: UserRole
 }
 
-interface NavItem {
+type SidebarItem = {
   title: string
   href: string
   icon: React.ComponentType<{ className?: string }>
@@ -78,7 +76,7 @@ const navigationConfig = {
 
 export function Sidebar({ isOpen, onClose, userRole }: SidebarProps) {
   const location = useLocation()
-  const navItems = navigationConfig[userRole] || []
+  const navItems: SidebarItem[] = navigationConfig[userRole] || []
 
   return (
     <>

@@ -71,9 +71,18 @@ router.get('/athlete/:athleteId', requireAuth, async (req, res) => {
         neuromuscularControl: riskFactor.neuromuscularControl,
         anatomicalFixedRisk: riskFactor.anatomicalFixedRisk,
         notes: (riskFactor as any).notes || [],
+        // Convenience payload for frontend: latest 1-10 values for pie chart
+        currentRiskFactors: {
+          strengthAsymmetry: ((riskFactor.strengthAsymmetry || []).slice(-1)[0]?.value ?? 0) as number,
+          neuromuscularControl: ((riskFactor.neuromuscularControl || []).slice(-1)[0]?.value ?? 0) as number,
+          anatomicalFixedRisk: ((riskFactor.anatomicalFixedRisk || []).slice(-1)[0]?.value ?? 0) as number,
+        },
         latest: {
           workloadManagement: (riskFactor.workloadManagement || []).slice(-1)[0] || null,
           mentalRecovery: (riskFactor.mentalRecovery || []).slice(-1)[0] || null,
+          strengthAsymmetry: (riskFactor.strengthAsymmetry || []).slice(-1)[0] || null,
+          neuromuscularControl: (riskFactor.neuromuscularControl || []).slice(-1)[0] || null,
+          anatomicalFixedRisk: (riskFactor.anatomicalFixedRisk || []).slice(-1)[0] || null,
           note: ((riskFactor as any).notes || []).slice(-1)[0] || null,
         }
       }
@@ -116,9 +125,18 @@ router.get('/athlete/email/:athleteEmail', requireAuth, async (req, res) => {
         neuromuscularControl: riskFactor.neuromuscularControl,
         anatomicalFixedRisk: riskFactor.anatomicalFixedRisk,
         notes: (riskFactor as any).notes || [],
+        // Convenience payload for frontend: latest 1-10 values for pie chart
+        currentRiskFactors: {
+          strengthAsymmetry: ((riskFactor.strengthAsymmetry || []).slice(-1)[0]?.value ?? 0) as number,
+          neuromuscularControl: ((riskFactor.neuromuscularControl || []).slice(-1)[0]?.value ?? 0) as number,
+          anatomicalFixedRisk: ((riskFactor.anatomicalFixedRisk || []).slice(-1)[0]?.value ?? 0) as number,
+        },
         latest: {
           workloadManagement: (riskFactor.workloadManagement || []).slice(-1)[0] || null,
           mentalRecovery: (riskFactor.mentalRecovery || []).slice(-1)[0] || null,
+          strengthAsymmetry: (riskFactor.strengthAsymmetry || []).slice(-1)[0] || null,
+          neuromuscularControl: (riskFactor.neuromuscularControl || []).slice(-1)[0] || null,
+          anatomicalFixedRisk: (riskFactor.anatomicalFixedRisk || []).slice(-1)[0] || null,
           note: ((riskFactor as any).notes || []).slice(-1)[0] || null,
         }
       }
